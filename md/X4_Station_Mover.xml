@@ -1,0 +1,280 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  X4 Station Mover — メインロジック（Mission Director）
+
+  仕組み:
+  - 移動は本体MDアクション <warp>（object/sector/position）。バニラのPHQ移設
+    （x4ep1_mentor_subscription.xml の Warp_HQ_To_Destination_*）がステーションに
+    対して実使用しており、sector指定は「座標にゾーンが無ければtempzoneを自動生成」。
+  - UI は SirNukes Mod Support APIs の Interact Menu API。マップ上の何もない場所の
+    右クリックでも Get_Actions が発火し、$offsetcomponent（多くはセクター）と
+    $offset（クリック座標、position型変換済み）が渡される（API側 @doc で確認）。
+  - フロー: ステーション右クリック→「移動…」で移動モード開始（Globalsに保持）
+    → マップの移動先を右クリック→「ここへ移動」で warp 実行。
+  - 高さ指定（v1.10）: 移動モード中に自分のナビビーコン（class.navbeacon・player所有）を
+    右クリック→「ここへ移動（ビーコン位置）」で、ビーコンの座標へ高さ込みで移動。
+    ビーコンは移動後に消費（destroy）する（回収の手間を省きフローを単純化する設計判断）。
+  - 移動モード開始時にマップ選択を自動解除（ui/x4sm_deselect.lua へ raise_lua_event）。
+    選択が残ると移動先の右クリックが命令メニューになり項目が出ないため。
+  - 高さ(Y)は要望どおり 0（エクリプティック平面）へ揃える。
+  - 建設ストレージ($station.buildstorage)は相対位置を保って一緒に warp する
+    （バニラPHQ実装ですら "TODO @Owen - build storage and CV" と未対応のため自前処理）。
+
+  注意（重要）: ルートcueの conditions にはイベント条件が必須（check_valueのみは無効化）。
+  起動時実行cueは conditions を書かない（姉妹MOD x4_invincibility の教訓）。
+  run_actions は独立した一時変数スコープで実行されるため、値を返すライブラリは
+  <return value="..."/> ＋ 呼び出し側 result="$var" で受け取る。
+
+  テキストは t/ の page 9004231 を参照（{9004231, NN}）。
+-->
+<mdscript name="X4_Station_Mover" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+  <cues>
+
+    <!-- ================================================================= -->
+    <!-- グローバル変数（$PendingStation: 移動モード中のステーション）        -->
+    <!-- ================================================================= -->
+    <cue name="Globals">
+      <actions>
+        <set_value name="$PendingStation" exact="null"/>
+      </actions>
+    </cue>
+
+    <!-- ================================================================= -->
+    <!-- ライブラリ: クリック地点からセクターとセクター座標を解決            -->
+    <!--   戻り値 table[$ok, $sector, $pos]（$posはY=0に平坦化済み）         -->
+    <!--   $offsetcomponent はセクターが基本だが、ゾーン等の場合は           -->
+    <!--   create_position でセクター空間へ変換して合成する（回転は無視）。   -->
+    <!-- ================================================================= -->
+    <library name="Lib_Resolve_Target" purpose="run_actions">
+      <params>
+        <param name="OffsetComponent"/>
+        <param name="Offset"/>
+      </params>
+      <actions>
+        <do_if value="not @$OffsetComponent.exists">
+          <return value="table[$ok=false]"/>
+        </do_if>
+        <do_if value="$OffsetComponent.isclass.{class.sector}">
+          <return value="table[
+            $ok     = true,
+            $sector = $OffsetComponent,
+            $pos    = position.[$Offset.x, 0m, $Offset.z]
+          ]"/>
+        </do_if>
+        <do_if value="$OffsetComponent.sector? and @$OffsetComponent.sector.exists">
+          <set_value name="$sector" exact="$OffsetComponent.sector"/>
+          <create_position name="$base" object="$OffsetComponent" space="$sector"/>
+          <return value="table[
+            $ok     = true,
+            $sector = $sector,
+            $pos    = position.[$base.x + $Offset.x, 0m, $base.z + $Offset.z]
+          ]"/>
+        </do_if>
+        <return value="table[$ok=false]"/>
+      </actions>
+    </library>
+
+    <!-- ================================================================= -->
+    <!-- ライブラリ: ステーションを指定セクター座標へ移動（副作用のみ）      -->
+    <!--   建設ストレージがあれば相対位置を保って随伴させる。                -->
+    <!-- ================================================================= -->
+    <library name="Lib_Move_Station" purpose="run_actions">
+      <params>
+        <param name="Station"/>
+        <param name="Sector"/>
+        <param name="Pos"/>
+      </params>
+      <actions>
+        <!-- 建設ストレージの相対位置を「移動前に」記録 -->
+        <set_value name="$bs" exact="null"/>
+        <do_if value="@$Station.buildstorage.exists">
+          <set_value name="$bs" exact="$Station.buildstorage"/>
+          <create_position name="$stationpos" object="$Station" space="$Station.sector"/>
+          <create_position name="$bspos" object="$bs" space="$Station.sector"/>
+          <set_value name="$bsoffset" exact="position.[
+            $bspos.x - $stationpos.x,
+            $bspos.y - $stationpos.y,
+            $bspos.z - $stationpos.z]"/>
+        </do_if>
+
+        <!-- 本体を移動（sector指定＝必要ならtempzone自動生成） -->
+        <warp object="$Station" sector="$Sector">
+          <position value="$Pos"/>
+        </warp>
+
+        <!-- 建設ストレージも相対位置を保って移動 -->
+        <do_if value="@$bs.exists">
+          <warp object="$bs" sector="$Sector">
+            <position value="position.[
+              $Pos.x + $bsoffset.x,
+              $Pos.y + $bsoffset.y,
+              $Pos.z + $bsoffset.z]"/>
+          </warp>
+        </do_if>
+      </actions>
+    </library>
+
+    <!-- ================================================================= -->
+    <!-- 右クリック（インタラクト）メニューへの項目追加                     -->
+    <!-- ================================================================= -->
+    <cue name="Add_Interact_Actions" instantiate="true" namespace="this">
+      <conditions>
+        <event_cue_signalled cue="md.Interact_Menu_API.Get_Actions"/>
+      </conditions>
+      <actions>
+        <set_value name="$object" exact="event.param.$object"/>
+        <set_value name="$pending" exact="md.X4_Station_Mover.Globals.$PendingStation"/>
+
+        <!-- (A) ステーションを右クリック → 移動モード開始 -->
+        <do_if value="@$object.exists and $object.isclass.{class.station}">
+          <signal_cue_instantly cue="md.Interact_Menu_API.Add_Action"
+            param="table[
+              $id        = 'x4sm_pick',
+              $section   = 'main',
+              $text      = {9004231, 10},
+              $mouseover = {9004231, 11},
+              $callback  = On_Pick_Station,
+              $keep_open = false,
+            ]"/>
+        </do_if>
+
+        <!-- (B) 移動モード中に座標付きの場所を右クリック → ここへ移動 -->
+        <do_if value="@$pending.exists and event.param.$offset? and event.param.$offsetcomponent?">
+          <run_actions ref="Lib_Resolve_Target" result="$res">
+            <param name="OffsetComponent" value="event.param.$offsetcomponent"/>
+            <param name="Offset" value="event.param.$offset"/>
+          </run_actions>
+          <do_if value="$res.$ok">
+            <signal_cue_instantly cue="md.Interact_Menu_API.Add_Action"
+              param="table[
+                $id        = 'x4sm_place',
+                $section   = 'main',
+                $text      = {9004231, 20} + $pending.knownname,
+                $mouseover = {9004231, 21},
+                $callback  = On_Place_Station,
+                $keep_open = false,
+              ]"/>
+          </do_if>
+        </do_if>
+
+        <!-- (B2) 移動モード中に自分のナビビーコンを右クリック → ビーコン位置へ移動（高さ維持） -->
+        <do_if value="@$pending.exists and @$object.exists and $object.isclass.{class.navbeacon} and @$object.owner == faction.player">
+          <signal_cue_instantly cue="md.Interact_Menu_API.Add_Action"
+            param="table[
+              $id        = 'x4sm_place_beacon',
+              $section   = 'main',
+              $text      = {9004231, 22} + $pending.knownname,
+              $mouseover = {9004231, 23},
+              $callback  = On_Place_At_Beacon,
+              $keep_open = false,
+            ]"/>
+        </do_if>
+
+        <!-- (C) 移動モード中は常にキャンセル項目を出す -->
+        <do_if value="@$pending.exists">
+          <signal_cue_instantly cue="md.Interact_Menu_API.Add_Action"
+            param="table[
+              $id        = 'x4sm_cancel',
+              $section   = 'main',
+              $text      = {9004231, 30},
+              $mouseover = {9004231, 31},
+              $callback  = On_Cancel_Move,
+              $keep_open = false,
+            ]"/>
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- 移動モード開始（対象はGlobalsにMD側で保持。Lua往復はしない） -->
+    <cue name="On_Pick_Station" instantiate="true" namespace="this">
+      <conditions>
+        <event_cue_signalled/>
+      </conditions>
+      <actions>
+        <set_value name="$station" exact="event.param.$object"/>
+        <do_if value="@$station.exists">
+          <set_value name="md.X4_Station_Mover.Globals.$PendingStation" exact="$station"/>
+          <!-- 右クリックで対象が選択状態のまま残ると、移動先の右クリックが
+               「選択ユニットへの命令メニュー」になり本MODの項目が出ない（実機報告）。
+               Lua側でマップ選択を解除する（ui/x4sm_deselect.lua）。 -->
+          <raise_lua_event name="'X4_Station_Mover.Deselect'"/>
+          <show_help custom="$station.knownname + {9004231, 60}" duration="8s"/>
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- 移動の実行 -->
+    <cue name="On_Place_Station" instantiate="true" namespace="this">
+      <conditions>
+        <event_cue_signalled/>
+      </conditions>
+      <actions>
+        <set_value name="$station" exact="md.X4_Station_Mover.Globals.$PendingStation"/>
+        <do_if value="not @$station.exists">
+          <!-- 移動モード中に対象が破壊された等 -->
+          <set_value name="md.X4_Station_Mover.Globals.$PendingStation" exact="null"/>
+          <show_help custom="{9004231, 63}" duration="6s"/>
+        </do_if>
+        <do_elseif value="event.param.$offset? and event.param.$offsetcomponent?">
+          <run_actions ref="Lib_Resolve_Target" result="$res">
+            <param name="OffsetComponent" value="event.param.$offsetcomponent"/>
+            <param name="Offset" value="event.param.$offset"/>
+          </run_actions>
+          <do_if value="$res.$ok">
+            <run_actions ref="Lib_Move_Station">
+              <param name="Station" value="$station"/>
+              <param name="Sector" value="$res.$sector"/>
+              <param name="Pos" value="$res.$pos"/>
+            </run_actions>
+            <set_value name="md.X4_Station_Mover.Globals.$PendingStation" exact="null"/>
+            <show_help custom="$station.knownname + {9004231, 61}" duration="6s"/>
+            <write_to_logbook category="general" title="{9004231, 90}" text="$station.knownname + {9004231, 61}" interaction="showonmap" object="$station"/>
+          </do_if>
+        </do_elseif>
+      </actions>
+    </cue>
+
+    <!-- ビーコン位置への移動（高さ込み）。ビーコンは移動後に消費する -->
+    <cue name="On_Place_At_Beacon" instantiate="true" namespace="this">
+      <conditions>
+        <event_cue_signalled/>
+      </conditions>
+      <actions>
+        <set_value name="$station" exact="md.X4_Station_Mover.Globals.$PendingStation"/>
+        <set_value name="$beacon" exact="event.param.$object"/>
+        <do_if value="not @$station.exists">
+          <!-- 移動モード中に対象が破壊された等 -->
+          <set_value name="md.X4_Station_Mover.Globals.$PendingStation" exact="null"/>
+          <show_help custom="{9004231, 63}" duration="6s"/>
+        </do_if>
+        <do_elseif value="@$beacon.exists and $beacon.isclass.{class.navbeacon}">
+          <set_value name="$sector" exact="$beacon.sector"/>
+          <!-- Y=0に平坦化しない: ビーコンの座標をそのまま使う（高さ指定が本機能の目的） -->
+          <create_position name="$pos" object="$beacon" space="$sector"/>
+          <run_actions ref="Lib_Move_Station">
+            <param name="Station" value="$station"/>
+            <param name="Sector" value="$sector"/>
+            <param name="Pos" value="$pos"/>
+          </run_actions>
+          <!-- ビーコンは役目を終えたら消費（回収の手間を省きフローを単純化する設計判断） -->
+          <destroy_object object="$beacon" explosion="false"/>
+          <set_value name="md.X4_Station_Mover.Globals.$PendingStation" exact="null"/>
+          <show_help custom="$station.knownname + {9004231, 61}" duration="6s"/>
+          <write_to_logbook category="general" title="{9004231, 90}" text="$station.knownname + {9004231, 61}" interaction="showonmap" object="$station"/>
+        </do_elseif>
+      </actions>
+    </cue>
+
+    <!-- 移動モードのキャンセル -->
+    <cue name="On_Cancel_Move" instantiate="true" namespace="this">
+      <conditions>
+        <event_cue_signalled/>
+      </conditions>
+      <actions>
+        <set_value name="md.X4_Station_Mover.Globals.$PendingStation" exact="null"/>
+        <show_help custom="{9004231, 62}" duration="4s"/>
+      </actions>
+    </cue>
+
+  </cues>
+</mdscript>

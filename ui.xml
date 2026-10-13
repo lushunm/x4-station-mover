@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<addon name="x4_station_mover" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../core/coreaddon.xsd">
+  <environment type="menus">
+    <file name="ui/x4sm_deselect.lua"/>
+    <!-- menu_map.lua（MapMenu）を含む本体UIアドオンより後に読み込ませる -->
+    <dependency name="ego_detailmonitor"/>
+  </environment>
+</addon>

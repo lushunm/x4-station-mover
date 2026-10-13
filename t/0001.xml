@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Default (fallback) text used for any language without a dedicated t-file (e.g. German/French). Keep in sync with 0001-L044.xml. -->
+<language>
+  <page id="9004231" title="X4 Station Mover" descr="Texts for station mover" voice="no">
+    <!-- インタラクトメニュー項目 -->
+    <t id="10">Move station...</t>
+    <t id="11">Arm move mode for this station. Then right-click an empty spot on the map and select 'Move here'.</t>
+    <t id="20">Move here: </t>
+    <t id="21">Teleport the station being moved to this position. Height \(Y\) is set to 0. Its build storage moves along with it.</t>
+    <t id="22">Move here \(at beacon\): </t>
+    <t id="23">Teleport the station being moved to this beacon's exact position, keeping the beacon's height. The beacon is consumed after the move.</t>
+    <t id="30">Cancel station move</t>
+    <t id="31">Exit move mode without moving anything.</t>
+    <!-- 通知（60/61は先頭にステーション名を連結） -->
+    <t id="60"> : move mode armed. Right-click a destination spot on the map and select 'Move here'.</t>
+    <t id="61"> has been moved.</t>
+    <t id="62">Station move cancelled.</t>
+    <t id="63">The station no longer exists. Move mode cancelled.</t>
+    <!-- ログブックのタイトル -->
+    <t id="90">Station Mover</t>
+  </page>
+</language>
