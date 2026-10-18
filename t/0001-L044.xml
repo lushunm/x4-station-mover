@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- English text. Keep in sync with 0001.xml (language-neutral fallback). -->
+<!-- English text. Keep in sync with 0001.xml (language-neutral fallback); keep ids in sync with 0001-L081.xml / 0001-L007.xml. -->
 <language id="44">
   <page id="9004231" title="X4 Station Mover" descr="Texts for station mover" voice="no">
     <!-- インタラクトメニュー項目 -->

@@ -19,6 +19,9 @@
   - 高さ(Y)は要望どおり 0（エクリプティック平面）へ揃える。
   - 建設ストレージ($station.buildstorage)は相対位置を保って一緒に warp する
     （バニラPHQ実装ですら "TODO @Owen - build storage and CV" と未対応のため自前処理）。
+  - 向き（v1.12）: 本体・ストレージとも移動前の向きを warp の <rotation> に明示指定して保つ
+    （GitHub Issue #1 の KroshkaRoo 氏の寄稿を元に実装）。対象はステーションのみ。
+    ジャンプゲートは別セクターへ移すと銀河の接続が書き換わり、ストーリーの前提も壊れるため対象外。
 
   注意（重要）: ルートcueの conditions にはイベント条件が必須（check_valueのみは無効化）。
   起動時実行cueは conditions を書かない（姉妹MOD x4_invincibility の教訓）。
@@ -77,6 +80,7 @@
     <!-- ================================================================= -->
     <!-- ライブラリ: ステーションを指定セクター座標へ移動（副作用のみ）      -->
     <!--   建設ストレージがあれば相対位置を保って随伴させる。                -->
+    <!--   向きは本体・ストレージとも移動前の値を明示指定して保つ。          -->
     <!-- ================================================================= -->
     <library name="Lib_Move_Station" purpose="run_actions">
       <params>
@@ -85,10 +89,15 @@
         <param name="Pos"/>
       </params>
       <actions>
-        <!-- 建設ストレージの相対位置を「移動前に」記録 -->
+        <!-- 向きは「移動前に」セクター空間で記録する。warp で rotation を省略した時に
+             向きが保たれる保証は xsd に無いため明示指定する（position と同じセクター空間に揃える）。 -->
+        <set_value name="$stationrot" exact="$Station.relativerotation.{$Station.sector}"/>
+
+        <!-- 建設ストレージの相対位置と向きを「移動前に」記録 -->
         <set_value name="$bs" exact="null"/>
         <do_if value="@$Station.buildstorage.exists">
           <set_value name="$bs" exact="$Station.buildstorage"/>
+          <set_value name="$bsrot" exact="$bs.relativerotation.{$Station.sector}"/>
           <create_position name="$stationpos" object="$Station" space="$Station.sector"/>
           <create_position name="$bspos" object="$bs" space="$Station.sector"/>
           <set_value name="$bsoffset" exact="position.[
@@ -100,15 +109,17 @@
         <!-- 本体を移動（sector指定＝必要ならtempzone自動生成） -->
         <warp object="$Station" sector="$Sector">
           <position value="$Pos"/>
+          <rotation value="$stationrot"/>
         </warp>
 
-        <!-- 建設ストレージも相対位置を保って移動 -->
+        <!-- 建設ストレージも相対位置を保って移動（両者とも向き不変の平行移動なのでオフセットの回転は不要） -->
         <do_if value="@$bs.exists">
           <warp object="$bs" sector="$Sector">
             <position value="position.[
               $Pos.x + $bsoffset.x,
               $Pos.y + $bsoffset.y,
               $Pos.z + $bsoffset.z]"/>
+            <rotation value="$bsrot"/>
           </warp>
         </do_if>
       </actions>
